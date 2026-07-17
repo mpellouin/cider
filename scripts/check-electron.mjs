@@ -62,7 +62,22 @@ if (!binaryOk()) {
   try {
     execSync(`"${process.execPath}" install.js`, { cwd: electronPkg, stdio: "inherit", env });
   } catch {
-    /* fall through to the final check */
+    /* fall through */
+  }
+
+  // Still nothing? A previously interrupted download can leave a corrupt zip
+  // in ~/.cache/electron that "Cache hit"s forever. Force a fresh download.
+  if (!binaryOk()) {
+    console.log("[cider] Retrying with a fresh download (ignoring the local electron cache)…");
+    try {
+      execSync(`"${process.execPath}" install.js`, {
+        cwd: electronPkg,
+        stdio: "inherit",
+        env: { ...env, force_no_cache: "true", DEBUG: "@electron/get*" },
+      });
+    } catch {
+      /* fall through to the final check */
+    }
   }
 }
 
