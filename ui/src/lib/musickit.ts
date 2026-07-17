@@ -10,7 +10,7 @@
  *   webview has no CDM (e.g. WebKitGTK on Linux).
  */
 
-import { invoke, isTauri, listen } from "./tauri";
+import { invoke, isDesktop, isTauri, listen } from "./tauri";
 
 const MUSICKIT_CDN = "https://js-cdn.music.apple.com/musickit/v3/amp/musickit.js";
 const AUTH_ORIGIN = "https://authorize.music.apple.com";
@@ -149,7 +149,12 @@ interface DeveloperToken {
 }
 
 async function fetchDeveloperToken(forceRefresh = false): Promise<string> {
-  if (isTauri) {
+  // A manually-provided token always wins (Settings/boot-error escape hatch
+  // for networks where both token sources are unreachable).
+  const manual = localStorage.getItem("cider.manualToken");
+  if (manual && !forceRefresh) return manual;
+
+  if (isDesktop) {
     const res = await invoke<DeveloperToken>("fetch_developer_token", {
       forceRefresh,
     });

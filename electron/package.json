@@ -1,0 +1,22 @@
+{
+  "name": "cider-shell",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Electron (castLabs/Widevine) shell hosting the new Cider UI — full DRM playback on Linux, Windows and macOS",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "discord-auto-rpc": "^1.0.17"
+  },
+  "devDependencies": {
+    "electron": "github:castlabs/electron-releases#v32.2.6+wvcus"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  }
+}

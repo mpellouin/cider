@@ -6,12 +6,12 @@
 import { watch } from "vue";
 import { usePlayer } from "@/stores/player";
 import { useSettings } from "@/stores/settings";
-import { invoke, isTauri } from "./tauri";
+import { invoke, isDesktop } from "./tauri";
 
 let started = false;
 
 export function startPresenceSync(): void {
-  if (started || !isTauri) return;
+  if (started || !isDesktop) return;
   started = true;
 
   const player = usePlayer();

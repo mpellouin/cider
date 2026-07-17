@@ -120,20 +120,22 @@ async fn from_apple_web() -> Result<DeveloperToken, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    // Find the main JS bundle, e.g. /assets/index-legacy-xxxx.js or /assets/index~xxxx.js
+    // Collect every JS asset referenced by the page, index bundles first —
+    // the token usually lives in the main chunk but not always.
     let mut bundles: Vec<String> = Vec::new();
     for chunk in html.split('"') {
-        if chunk.starts_with("/assets/index") && chunk.ends_with(".js") {
-            bundles.push(format!("https://music.apple.com{chunk}"));
+        if chunk.starts_with("/assets/") && chunk.ends_with(".js") && !bundles.contains(&chunk.to_string()) {
+            bundles.push(chunk.to_string());
         }
     }
+    bundles.sort_by_key(|b| !b.contains("index"));
     if bundles.is_empty() {
         return Err("could not locate a music.apple.com JS bundle".into());
     }
 
-    for bundle_url in bundles.iter().take(4) {
+    for bundle in bundles.iter().take(8) {
         let js = match client
-            .get(bundle_url)
+            .get(format!("https://music.apple.com{bundle}"))
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
@@ -141,22 +143,42 @@ async fn from_apple_web() -> Result<DeveloperToken, String> {
             Ok(r) => r.text().await.unwrap_or_default(),
             Err(_) => continue,
         };
-        // Developer tokens are ES256 JWTs; they always start with "eyJh".
-        if let Some(idx) = js.find("\"eyJh") {
-            let rest = &js[idx + 1..];
-            if let Some(end) = rest.find('"') {
-                let candidate = &rest[..end];
-                if candidate.split('.').count() == 3 {
-                    return Ok(DeveloperToken {
-                        token: candidate.to_string(),
-                        expires_at: jwt_expiry(candidate),
-                        origin: "apple-web".into(),
-                    });
-                }
-            }
+        if let Some(token) = extract_jwt(&js) {
+            return Ok(DeveloperToken {
+                expires_at: jwt_expiry(&token),
+                token,
+                origin: "apple-web".into(),
+            });
         }
     }
     Err("no developer token found in the music.apple.com bundles".into())
+}
+
+/// Find the first ES256-JWT-looking string ("eyJh…", three dot-separated
+/// base64url segments of plausible length) anywhere in a JS bundle.
+fn extract_jwt(js: &str) -> Option<String> {
+    let bytes = js.as_bytes();
+    let mut start = 0;
+    while let Some(idx) = js[start..].find("eyJh") {
+        let begin = start + idx;
+        let end = js[begin..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'))
+            .map(|off| begin + off)
+            .unwrap_or(js.len());
+        let candidate = &js[begin..end];
+        let segments: Vec<&str> = candidate.split('.').collect();
+        if segments.len() == 3
+            && segments.iter().all(|s| s.len() >= 16)
+            && candidate.len() >= 100
+        {
+            return Some(candidate.to_string());
+        }
+        start = begin + 4;
+        if start >= bytes.len() {
+            break;
+        }
+    }
+    None
 }
 
 pub async fn acquire(config_dir: PathBuf, force_refresh: bool) -> Result<DeveloperToken, String> {

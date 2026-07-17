@@ -8,7 +8,7 @@
 import { watch } from "vue";
 import { usePlayer } from "@/stores/player";
 import { useSettings } from "@/stores/settings";
-import { isTauri } from "./tauri";
+import { isElectron, isTauri } from "./tauri";
 
 export function startMediaKeys(): void {
   const player = usePlayer();
@@ -53,7 +53,18 @@ export function startMediaKeys(): void {
   }
 
   /* Global media keys (background control) */
-  if (isTauri) {
+  if (isElectron) {
+    window.cider!.onMediaKey((action) => {
+      if (action === "play-pause") void player.togglePlay();
+      else if (action === "next") void player.next();
+      else if (action === "previous") void player.previous();
+    });
+    watch(
+      () => settings.globalMediaKeys,
+      (enabled) => void window.cider!.setMediaKeys(enabled).catch(() => {}),
+      { immediate: true }
+    );
+  } else if (isTauri) {
     const applyGlobal = async (enable: boolean) => {
       try {
         const gs = await import("@tauri-apps/plugin-global-shortcut");
