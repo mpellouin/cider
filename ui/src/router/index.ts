@@ -1,5 +1,7 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 
+// Hash history keeps routing working under file:// (no server to honour
+// deep links) — important for the Electron shell's loadFile().
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [

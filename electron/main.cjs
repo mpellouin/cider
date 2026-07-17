@@ -178,21 +178,32 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
-  // castLabs Electron: wait for the Widevine CDM to be installed/loaded.
-  if (components?.whenReady) {
-    try {
-      await components.whenReady();
-      console.log("[cider] Widevine status:", components.status());
-    } catch (err) {
-      console.warn("[cider] Widevine unavailable, DRM playback will fail:", err);
-    }
-  } else {
-    console.warn("[cider] Not a castLabs build — no Widevine, previews only.");
-  }
-
   spoofAppleHeaders();
   registerIpc();
   createWindow();
+
+  // castLabs Widevine installs in the background and persists across
+  // launches — don't block the UI on it. The renderer's DRM probe will
+  // show preview-only until the component is ready, then full playback
+  // after a relaunch.
+  if (components?.whenReady) {
+    components
+      .whenReady()
+      .then(() => {
+        console.log("[cider] Widevine ready:", JSON.stringify(components.status?.() ?? "installed"));
+        win?.webContents.send("cider:widevine-ready");
+      })
+      .catch((err) => {
+        console.warn(
+          "[cider] Widevine component not installed yet:",
+          err?.message ?? err,
+          "\n[cider] Full playback needs the CDM — it retries on the next launch " +
+            "(check network/proxy if this persists)."
+        );
+      });
+  } else {
+    console.warn("[cider] Not a castLabs build — no Widevine, previews only.");
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
