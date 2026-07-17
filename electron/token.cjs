@@ -14,6 +14,58 @@ const path = require("path");
 const CIDER_TOKEN_API = "https://api.cider.sh/v1/";
 const APPLE_MUSIC_HOME = "https://music.apple.com/us/browse";
 
+// api.cider.sh sits behind Cloudflare and rejects non-browser clients, so we
+// must present as a real Chrome — and route through Electron's `net` (the
+// Chromium network stack) rather than Node's fetch, which Cloudflare
+// fingerprints and blocks. This is why the legacy app fetched the token from
+// a browser context.
+const CHROME_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const SAFARI_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+
+/**
+ * Fetch text over Electron's Chromium network stack (falls back to Node fetch
+ * if the `net` module isn't available for some reason).
+ */
+async function netFetch(url, { headers = {}, timeoutMs = 15_000 } = {}) {
+  let net;
+  try {
+    ({ net } = require("electron"));
+  } catch {
+    net = null;
+  }
+
+  if (!net) {
+    const res = await fetchWithTimeout(url, { headers }, timeoutMs);
+    return { status: res.status, ok: res.ok, text: await res.text() };
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = net.request({ method: "GET", url, redirect: "follow" });
+    for (const [k, v] of Object.entries(headers)) request.setHeader(k, v);
+    const timer = setTimeout(() => {
+      request.abort();
+      reject(new Error(`timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    request.on("response", (response) => {
+      const chunks = [];
+      response.on("data", (c) => chunks.push(c));
+      response.on("end", () => {
+        clearTimeout(timer);
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({ status: response.statusCode, ok: response.statusCode < 400, text });
+      });
+    });
+    request.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    request.end();
+  });
+}
+
 function jwtExpiry(token) {
   try {
     const payload = token.split(".")[1];
@@ -61,26 +113,47 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
 }
 
 async function fromCiderApi() {
-  const res = await fetchWithTimeout(CIDER_TOKEN_API, {
-    headers: { "User-Agent": "Cider" },
-  }, 10_000);
+  const res = await netFetch(CIDER_TOKEN_API, {
+    headers: {
+      "User-Agent": CHROME_UA,
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://cider.sh",
+      Referer: "https://cider.sh/",
+    },
+    timeoutMs: 12_000,
+  });
   if (!res.ok) throw new Error(`cider api returned ${res.status}`);
-  const body = await res.json();
+  let body;
+  try {
+    body = JSON.parse(res.text);
+  } catch {
+    throw new Error("cider api returned non-JSON");
+  }
   if (!body?.token) throw new Error("cider api returned an empty token");
   return { token: body.token, expires_at: jwtExpiry(body.token), origin: "cider-api" };
 }
 
-/** Scrape a developer token from the music.apple.com web bundles. */
+/** Scrape a developer token from music.apple.com (meta tag or JS bundles). */
 async function fromAppleWeb() {
-  const res = await fetchWithTimeout(APPLE_MUSIC_HOME, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    },
+  const res = await netFetch(APPLE_MUSIC_HOME, {
+    headers: { "User-Agent": SAFARI_UA },
+    timeoutMs: 20_000,
   });
-  const html = await res.text();
+  const html = res.text;
 
-  // Collect every JS asset referenced by the page (order: index bundles first).
+  // Modern music.apple.com embeds the token in a config meta tag:
+  //   <meta name="desktop-music-app/config/environment" content="<url-encoded JSON>">
+  // The JSON has MEDIA_API.token.
+  const metaToken = tokenFromEnvironmentMeta(html);
+  if (metaToken) {
+    return { token: metaToken, expires_at: jwtExpiry(metaToken), origin: "apple-web-meta" };
+  }
+  const inlineToken = extractJwt(html);
+  if (inlineToken) {
+    return { token: inlineToken, expires_at: jwtExpiry(inlineToken), origin: "apple-web-html" };
+  }
+
+  // Otherwise dig through the JS bundles.
   const assets = [];
   const re = /(?:src="|href="|")(\/assets\/[A-Za-z0-9._~-]+\.js)"/g;
   let match;
@@ -91,21 +164,45 @@ async function fromAppleWeb() {
 
   if (assets.length === 0) throw new Error("no JS bundles found on music.apple.com");
 
-  for (const asset of assets.slice(0, 8)) {
+  for (const asset of assets.slice(0, 10)) {
     let js = "";
     try {
-      const bundleRes = await fetchWithTimeout(`https://music.apple.com${asset}`, {}, 20_000);
-      js = await bundleRes.text();
+      const bundleRes = await netFetch(`https://music.apple.com${asset}`, {
+        headers: { "User-Agent": SAFARI_UA },
+        timeoutMs: 20_000,
+      });
+      js = bundleRes.text;
     } catch {
       continue;
     }
-    // Developer tokens are ES256 JWTs starting with eyJh, ~200+ chars, 3 segments.
-    const tokenMatch = js.match(/["'`](eyJh[\w-]+\.[\w-]+\.[\w-]+)["'`]/);
-    if (tokenMatch) {
-      return { token: tokenMatch[1], expires_at: jwtExpiry(tokenMatch[1]), origin: "apple-web" };
+    const token = extractJwt(js);
+    if (token) {
+      return { token, expires_at: jwtExpiry(token), origin: "apple-web" };
     }
   }
   throw new Error("no developer token found in the music.apple.com bundles");
+}
+
+function tokenFromEnvironmentMeta(html) {
+  const m = html.match(
+    /<meta[^>]+name="desktop-music-app\/config\/environment"[^>]+content="([^"]+)"/
+  );
+  if (!m) return null;
+  try {
+    const json = JSON.parse(decodeURIComponent(m[1]));
+    const token = json?.MEDIA_API?.token || json?.mediaApi?.token || json?.MEDIA_API?.developerToken;
+    if (typeof token === "string" && token.startsWith("eyJ")) return token;
+  } catch {
+    /* not the shape we expected */
+  }
+  return null;
+}
+
+/** First plausible ES256 JWT ("eyJh…", three ≥16-char base64url segments). */
+function extractJwt(text) {
+  const re = /eyJh[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g;
+  const m = re.exec(text);
+  return m ? m[0] : null;
 }
 
 async function getDeveloperToken(userDataDir, forceRefresh = false) {
