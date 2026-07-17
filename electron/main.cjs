@@ -4,20 +4,24 @@
  * on Linux, Windows and macOS alike.
  *
  * Dev:   pnpm --dir ui dev   +   electron . --dev   (loads localhost:1420)
- * Prod:  electron .                                  (loads ../ui/dist)
+ * Prod:  electron .            (serves ../ui/dist over http://localhost)
  */
 
 const { app, BrowserWindow, components, globalShortcut, ipcMain, session, shell } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const token = require("./token.cjs");
 const discord = require("./discord.cjs");
+const { startStaticServer } = require("./server.cjs");
 
 const DEV = process.argv.includes("--dev");
 const DEV_URL = process.env.CIDER_DEV_URL || "http://localhost:1420";
-const UI_DIST = path.join(__dirname, "..", "ui", "dist", "index.html");
+const UI_DIST_DIR = path.join(__dirname, "..", "ui", "dist");
 
 /** @type {BrowserWindow | null} */
 let win = null;
+/** @type {import("http").Server | null} */
+let staticServer = null;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -115,7 +119,18 @@ function createWindow() {
     win.loadURL(DEV_URL);
     win.webContents.openDevTools({ mode: "detach" });
   } else {
-    win.loadFile(UI_DIST);
+    // Serve over http://localhost so MusicKit has a real web origin
+    // (Apple sign-in rejects file://). Falls back to file:// if the tiny
+    // static server can't start for some reason.
+    startStaticServer(UI_DIST_DIR)
+      .then(({ url, server }) => {
+        staticServer = server;
+        win?.loadURL(url);
+      })
+      .catch((err) => {
+        console.warn("[cider] static server failed, falling back to file://:", err?.message ?? err);
+        win?.loadFile(path.join(UI_DIST_DIR, "index.html"));
+      });
   }
 }
 
@@ -217,4 +232,8 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   discord.destroy();
+  if (staticServer) {
+    staticServer.close();
+    staticServer = null;
+  }
 });
