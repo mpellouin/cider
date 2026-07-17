@@ -4,9 +4,9 @@
   "version": "2.0.0",
   "identifier": "sh.cider.tauri",
   "build": {
-    "beforeDevCommand": "pnpm --dir ../ui dev",
+    "beforeDevCommand": "pnpm --dir ui dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm --dir ../ui build",
+    "beforeBuildCommand": "pnpm --dir ui build",
     "frontendDist": "../ui/dist"
   },
   "app": {
