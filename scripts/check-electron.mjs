@@ -1,20 +1,40 @@
 /**
  * Preflight for the Electron shell: make sure the castLabs Electron binary
- * actually exists for THIS platform before launching.
+ * actually exists for THIS platform before launching — WITHOUT trusting
+ * electron's install.js, which exits silently in several situations
+ * (ELECTRON_SKIP_BINARY_DOWNLOAD set, and a known silent no-extract on
+ * recent Node versions).
  *
- * The castlabs/electron-releases repo ships a path.txt pointing at the macOS
- * binary; if the postinstall download never ran (blocked build scripts,
- * network hiccup), `electron .` fails with a confusing ENOENT. This script
- * detects that state and re-runs the download.
+ * Strategy:
+ *   1. binary already there → done
+ *   2. a matching zip exists in the electron cache → extract it ourselves
+ *   3. no zip → run install.js (env-scrubbed) to download, then extract
+ *      ourselves if install.js didn't
+ *   4. still nothing → force a fresh download and extract
  */
 
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { execSync, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  closeSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const electronPkg = path.join(root, "electron", "node_modules", "electron");
+const distPath = path.join(electronPkg, "dist");
 
 const expectedRelative = {
   linux: "electron",
@@ -27,56 +47,135 @@ if (!expectedRelative) {
   process.exit(1);
 }
 
-function binaryOk() {
-  if (!existsSync(electronPkg)) return false;
-  const pathFile = path.join(electronPkg, "path.txt");
-  const recorded = existsSync(pathFile) ? readFileSync(pathFile, "utf8").trim() : "";
-  const binary = path.join(electronPkg, "dist", recorded || expectedRelative);
-  // path.txt must match this platform AND the binary must exist.
-  const normalized = recorded.split("/").join(path.sep);
-  return normalized === expectedRelative && existsSync(binary);
-}
-
 if (!existsSync(electronPkg)) {
   console.log("[cider] Electron not installed yet — running pnpm install in electron/ …");
   execSync("pnpm install", { cwd: path.join(root, "electron"), stdio: "inherit" });
 }
 
-if (!binaryOk()) {
-  console.log("[cider] Electron binary missing or wrong platform — downloading it now (~110 MB)…");
+const electronVersion = JSON.parse(
+  readFileSync(path.join(electronPkg, "package.json"), "utf8")
+).version;
+const zipName = `electron-v${electronVersion}-${process.platform}-${process.arch}.zip`;
 
-  // Run the package's own install script DIRECTLY (not via pnpm rebuild):
-  // this sidesteps pnpm's build-script gating/caching, and we scrub env vars
-  // that make install.js exit silently without downloading anything.
+function binaryOk() {
+  const binary = path.join(distPath, expectedRelative);
+  return existsSync(binary);
+}
+
+function markInstalled() {
+  // What install.js would have written had it finished.
+  writeFileSync(path.join(electronPkg, "path.txt"), expectedRelative.split(path.sep).join("/"));
+  const versionFile = path.join(distPath, "version");
+  if (!existsSync(versionFile)) writeFileSync(versionFile, `v${electronVersion}`);
+}
+
+function cacheRoots() {
+  return [
+    process.env.electron_config_cache,
+    process.env.XDG_CACHE_HOME ? path.join(process.env.XDG_CACHE_HOME, "electron") : null,
+    path.join(os.homedir(), ".cache", "electron"),
+    path.join(os.homedir(), "Library", "Caches", "electron"),
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "electron", "Cache") : null,
+  ].filter(Boolean);
+}
+
+function findCachedZip() {
+  for (const cacheRoot of cacheRoots()) {
+    try {
+      const entries = readdirSync(cacheRoot, { recursive: true });
+      for (const entry of entries) {
+        if (String(entry).endsWith(zipName)) return path.join(cacheRoot, String(entry));
+      }
+    } catch {
+      /* cache root doesn't exist */
+    }
+  }
+  return null;
+}
+
+function looksLikeZip(file) {
+  try {
+    const fd = openSync(file, "r");
+    const header = Buffer.alloc(4);
+    readSync(fd, header, 0, 4, 0);
+    closeSync(fd);
+    return header[0] === 0x50 && header[1] === 0x4b; // "PK"
+  } catch {
+    return false;
+  }
+}
+
+async function extractZip(zipPath) {
+  const size = statSync(zipPath).size;
+  console.log(`[cider] Extracting ${zipPath} (${(size / 1e6).toFixed(1)} MB) → ${distPath}`);
+  if (size < 20_000_000 || !looksLikeZip(zipPath)) {
+    throw new Error(
+      `cached file doesn't look like a valid Electron zip (${size} bytes) — likely a corrupt download`
+    );
+  }
+  rmSync(distPath, { recursive: true, force: true });
+  mkdirSync(distPath, { recursive: true });
+
+  // Prefer the extract-zip that ships with the electron package itself
+  // (resolve through the real path — pnpm symlinks the package dir).
+  try {
+    const realPkg = realpathSync(electronPkg);
+    const requireFromElectron = createRequire(path.join(realPkg, "package.json"));
+    const extract = requireFromElectron("extract-zip");
+    await extract(zipPath, { dir: distPath });
+  } catch (err) {
+    console.warn(`[cider] extract-zip failed (${err?.message ?? err}) — trying system unzip/tar`);
+    const result =
+      process.platform === "win32"
+        ? spawnSync("tar", ["-xf", zipPath, "-C", distPath], { stdio: "inherit" })
+        : spawnSync("unzip", ["-o", "-q", zipPath, "-d", distPath], { stdio: "inherit" });
+    if (result.status !== 0) {
+      throw new Error(`system extraction failed too (exit ${result.status})`);
+    }
+  }
+  markInstalled();
+}
+
+function runInstallJs(force) {
   const env = { ...process.env };
   if (env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
-    console.warn(
-      "[cider] ELECTRON_SKIP_BINARY_DOWNLOAD is set in your environment — " +
-        "ignoring it for this download (it silently skips the Electron binary)."
-    );
+    console.warn("[cider] Ignoring ELECTRON_SKIP_BINARY_DOWNLOAD for this download.");
     delete env.ELECTRON_SKIP_BINARY_DOWNLOAD;
   }
-  delete env.npm_config_platform; // never cross-download for another OS
+  delete env.npm_config_platform;
   delete env.npm_config_arch;
-
+  if (force) env.force_no_cache = "true";
   try {
     execSync(`"${process.execPath}" install.js`, { cwd: electronPkg, stdio: "inherit", env });
   } catch {
-    /* fall through */
+    /* verified by the caller */
+  }
+}
+
+/* ------------------------------------------------------------------ */
+
+if (!binaryOk()) {
+  // 1. Something already in the cache? Extract it ourselves — install.js
+  //    "Cache hit"s and then silently does nothing on some Node versions.
+  let zip = findCachedZip();
+  if (zip) {
+    try {
+      await extractZip(zip);
+    } catch (err) {
+      console.warn(`[cider] ${err.message}`);
+      console.log("[cider] Removing the bad cached zip and downloading fresh…");
+      rmSync(zip, { force: true });
+      zip = null;
+    }
   }
 
-  // Still nothing? A previously interrupted download can leave a corrupt zip
-  // in ~/.cache/electron that "Cache hit"s forever. Force a fresh download.
+  // 2. No (valid) zip → download, then extract whatever landed in the cache.
   if (!binaryOk()) {
-    console.log("[cider] Retrying with a fresh download (ignoring the local electron cache)…");
-    try {
-      execSync(`"${process.execPath}" install.js`, {
-        cwd: electronPkg,
-        stdio: "inherit",
-        env: { ...env, force_no_cache: "true", DEBUG: "@electron/get*" },
-      });
-    } catch {
-      /* fall through to the final check */
+    console.log(`[cider] Downloading Electron v${electronVersion} (~110 MB)…`);
+    runInstallJs(!zip);
+    if (!binaryOk()) {
+      const fresh = findCachedZip();
+      if (fresh) await extractZip(fresh).catch((err) => console.error(`[cider] ${err.message}`));
     }
   }
 }
@@ -84,11 +183,12 @@ if (!binaryOk()) {
 if (!binaryOk()) {
   console.error(
     "\n[cider] The castLabs Electron binary is still missing.\n" +
-      "  1. Check for env vars that block the download:  env | grep -i electron\n" +
-      "  2. Retry verbosely:  cd electron/node_modules/electron && DEBUG='@electron/get*' node install.js\n" +
-      "  (the binary comes from github.com/castlabs/electron-releases releases — check network/proxy)\n"
+      `  Expected: electron/node_modules/electron/dist/${expectedRelative}\n` +
+      `  Cache roots checked: ${cacheRoots().join(", ")}\n` +
+      "  Check your network/proxy, then re-run. The binary comes from\n" +
+      "  github.com/castlabs/electron-releases releases.\n"
   );
   process.exit(1);
 }
 
-console.log("[cider] Electron binary OK for " + process.platform);
+console.log(`[cider] Electron binary OK for ${process.platform} (${expectedRelative})`);
