@@ -5,8 +5,8 @@
   "description": "Electron (castLabs/Widevine) shell hosting the new Cider UI — full DRM playback on Linux, Windows and macOS",
   "main": "main.cjs",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev"
+    "start": "node launch.cjs",
+    "dev": "node launch.cjs --dev"
   },
   "dependencies": {
     "discord-auto-rpc": "^1.0.17"
