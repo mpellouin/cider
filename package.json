@@ -16,6 +16,11 @@
   "homepage": "https://cider.sh/",
   "buildResources": "resources",
   "scripts": {
+    "tauri:setup": "pnpm --dir ui install",
+    "tauri:dev": "pnpm --dir ui tauri dev",
+    "tauri:build": "pnpm --dir ui tauri build",
+    "ui:dev": "pnpm --dir ui dev",
+    "ui:build": "pnpm --dir ui build",
     "bootstrap": "npx -y check-engine && pnpm i",
     "build": "tsc && lessc ./src/renderer/style.less ./src/renderer/style.css",
     "start": "npm run build && electron ./build/index.js",

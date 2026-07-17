@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cider",
+  "version": "2.0.0",
+  "identifier": "sh.cider.tauri",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../ui dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm --dir ../ui build",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Cider",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 620,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "dragDropEnabled": false,
+        "backgroundColor": "#0f0f13"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Music",
+    "shortDescription": "A delightful Apple Music experience",
+    "longDescription": "Cider is a cross-platform Apple Music client with a delightful UI, synced lyrics, Discord Rich Presence and more — now powered by Tauri.",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}
