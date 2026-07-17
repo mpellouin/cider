@@ -171,6 +171,19 @@ function registerIpc() {
 
   ipcMain.handle("cider:discord-clear", () => discord.clearActivity());
 
+  ipcMain.handle("cider:widevine-status", () => {
+    try {
+      return { status: components?.status?.() ?? {}, updatesEnabled: components?.updatesEnabled };
+    } catch (err) {
+      return { error: String(err) };
+    }
+  });
+
+  ipcMain.handle("cider:widevine-retry", () => {
+    installWidevine();
+    return true;
+  });
+
   ipcMain.handle("cider:set-media-keys", (_event, enabled) => {
     globalShortcut.unregisterAll();
     if (!enabled) return true;
@@ -198,32 +211,59 @@ app.whenReady().then(async () => {
   createWindow();
 
   // castLabs Widevine installs in the background and persists across
-  // launches — don't block the UI on it. The renderer's DRM probe will
-  // show preview-only until the component is ready, then full playback
-  // after a relaunch.
-  if (components?.whenReady) {
-    components
-      .whenReady()
-      .then(() => {
-        console.log("[cider] Widevine ready:", JSON.stringify(components.status?.() ?? "installed"));
-        win?.webContents.send("cider:widevine-ready");
-      })
-      .catch((err) => {
-        console.warn(
-          "[cider] Widevine component not installed yet:",
-          err?.message ?? err,
-          "\n[cider] Full playback needs the CDM — it retries on the next launch " +
-            "(check network/proxy if this persists)."
-        );
-      });
-  } else {
-    console.warn("[cider] Not a castLabs build — no Widevine, previews only.");
-  }
+  // launches — don't block the UI on it.
+  installWidevine();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+/**
+ * Install/verify the castLabs Widevine CDM, logging the real reason on
+ * failure (the nested ComponentError.detail carries the actual status).
+ */
+function installWidevine() {
+  if (!components?.whenReady) {
+    console.warn("[cider] Not a castLabs build — no Widevine, previews only.");
+    return;
+  }
+
+  // A previous run may have persisted component updates as disabled, which
+  // would make the CDM never install. Force them on.
+  try {
+    if (components.updatesEnabled === false) {
+      components.updatesEnabled = true;
+      console.log("[cider] Re-enabled component updates.");
+    }
+  } catch {
+    /* property may be read-only on some builds */
+  }
+
+  components
+    .whenReady()
+    .then(() => {
+      const status = components.status?.() ?? {};
+      console.log("[cider] Widevine ready:", JSON.stringify(status));
+      win?.webContents.send("cider:widevine-ready");
+    })
+    .catch((err) => {
+      const details = (err?.errors ?? [err]).map((e) => ({
+        message: e?.message,
+        detail: e?.detail, // { id, status, title, version }
+      }));
+      console.warn(
+        "[cider] Widevine CDM failed to install:\n" +
+          JSON.stringify(details, null, 2) +
+          "\n[cider] status(): " +
+          JSON.stringify(components.status?.() ?? {}) +
+          "\n[cider] Full playback needs this CDM. It downloads from Google's" +
+          " component servers; if this persists, a DNS/VPN/proxy is likely" +
+          " blocking it. Retry from Settings or relaunch."
+      );
+      win?.webContents.send("cider:widevine-failed", details);
+    });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

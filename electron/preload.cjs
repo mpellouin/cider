@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("cider", {
   discordSetActivity: (payload) => ipcRenderer.invoke("cider:discord-activity", payload),
   discordClearActivity: () => ipcRenderer.invoke("cider:discord-clear"),
 
+  widevineStatus: () => ipcRenderer.invoke("cider:widevine-status"),
+  widevineRetry: () => ipcRenderer.invoke("cider:widevine-retry"),
+
   setMediaKeys: (enabled) => ipcRenderer.invoke("cider:set-media-keys", enabled),
   onMediaKey: (callback) => {
     const listener = (_event, action) => callback(action);
