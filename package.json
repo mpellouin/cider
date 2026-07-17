@@ -17,8 +17,9 @@
   "buildResources": "resources",
   "scripts": {
     "tauri:setup": "pnpm --dir ui install",
-    "tauri:dev": "pnpm --dir ui tauri dev",
-    "tauri:build": "pnpm --dir ui tauri build",
+    "tauri": "node ui/node_modules/@tauri-apps/cli/tauri.js",
+    "tauri:dev": "node ui/node_modules/@tauri-apps/cli/tauri.js dev",
+    "tauri:build": "node ui/node_modules/@tauri-apps/cli/tauri.js build",
     "ui:dev": "pnpm --dir ui dev",
     "ui:build": "pnpm --dir ui build",
     "bootstrap": "npx -y check-engine && pnpm i",
