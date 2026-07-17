@@ -4,6 +4,9 @@ import { fileURLToPath, URL } from "node:url";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  // Relative asset URLs so the built app works under file:// (Electron) as
+  // well as when served over http.
+  base: "./",
   plugins: [vue()],
 
   resolve: {
