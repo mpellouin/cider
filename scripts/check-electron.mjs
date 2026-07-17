@@ -16,6 +16,7 @@
 import { execSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -116,23 +117,89 @@ async function extractZip(zipPath) {
   rmSync(distPath, { recursive: true, force: true });
   mkdirSync(distPath, { recursive: true });
 
-  // Prefer the extract-zip that ships with the electron package itself
-  // (resolve through the real path — pnpm symlinks the package dir).
-  try {
-    const realPkg = realpathSync(electronPkg);
-    const requireFromElectron = createRequire(path.join(realPkg, "package.json"));
-    const extract = requireFromElectron("extract-zip");
-    await extract(zipPath, { dir: distPath });
-  } catch (err) {
-    console.warn(`[cider] extract-zip failed (${err?.message ?? err}) — trying system unzip/tar`);
-    const result =
-      process.platform === "win32"
-        ? spawnSync("tar", ["-xf", zipPath, "-C", distPath], { stdio: "inherit" })
-        : spawnSync("unzip", ["-o", "-q", zipPath, "-d", distPath], { stdio: "inherit" });
-    if (result.status !== 0) {
-      throw new Error(`system extraction failed too (exit ${result.status})`);
+  // System tools FIRST: the extract-zip/yauzl shipped with electron
+  // deadlocks (promise never settles) on recent Node versions.
+  const attempts =
+    process.platform === "win32"
+      ? [["tar", ["-xf", zipPath, "-C", distPath]]]
+      : [
+          ["unzip", ["-o", "-q", zipPath, "-d", distPath]],
+          ["bsdtar", ["-xf", zipPath, "-C", distPath]],
+        ];
+
+  let extracted = false;
+  for (const [cmd, args] of attempts) {
+    const result = spawnSync(cmd, args, { stdio: "inherit" });
+    if (result.status === 0) {
+      extracted = true;
+      break;
+    }
+    // tool not installed → try the next one quietly; real failure → report
+    if (!result.error || result.error.code !== "ENOENT") {
+      console.warn(`[cider] ${cmd} exited with ${result.status ?? result.error?.code}`);
     }
   }
+
+  // extract-zip as a guarded fallback, with a hang timeout.
+  if (!extracted) {
+    try {
+      const realPkg = realpathSync(electronPkg);
+      const requireFromElectron = createRequire(path.join(realPkg, "package.json"));
+      const extract = requireFromElectron("extract-zip");
+      let timer;
+      const outcome = await Promise.race([
+        extract(zipPath, { dir: distPath }).then(
+          () => "ok",
+          (err) => {
+            console.warn(`[cider] extract-zip failed: ${err?.message ?? err}`);
+            return "error";
+          }
+        ),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), 120_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (outcome === "ok") extracted = true;
+      else if (outcome === "timeout") console.warn("[cider] extract-zip hung — known issue on recent Node");
+    } catch (err) {
+      console.warn(`[cider] extract-zip unavailable: ${err?.message ?? err}`);
+    }
+  }
+
+  // Last resort: python3 zipfile, restoring unix permission bits manually.
+  if (!extracted && process.platform !== "win32") {
+    const py =
+      "import zipfile,os,sys\n" +
+      "z=zipfile.ZipFile(sys.argv[1]); d=sys.argv[2]\n" +
+      "z.extractall(d)\n" +
+      "for i in z.infolist():\n" +
+      "    m=i.external_attr>>16\n" +
+      "    if m: os.chmod(os.path.join(d,i.filename),m)\n";
+    const result = spawnSync("python3", ["-c", py, zipPath, distPath], { stdio: "inherit" });
+    if (result.status === 0) extracted = true;
+  }
+
+  if (!extracted) {
+    throw new Error(
+      "could not extract the Electron zip — install `unzip` (e.g. sudo apt install unzip) and re-run"
+    );
+  }
+
+  // Make sure the executables kept their exec bits regardless of extractor.
+  if (process.platform !== "win32") {
+    for (const bin of ["electron", "chrome_crashpad_handler", "Electron.app/Contents/MacOS/Electron"]) {
+      const p = path.join(distPath, bin);
+      if (existsSync(p)) {
+        try {
+          chmodSync(p, 0o755);
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+  }
+
   markInstalled();
 }
 
@@ -192,3 +259,5 @@ if (!binaryOk()) {
 }
 
 console.log(`[cider] Electron binary OK for ${process.platform} (${expectedRelative})`);
+// Exit explicitly: a hung extract-zip promise must not keep (or kill) the process.
+process.exit(0);
