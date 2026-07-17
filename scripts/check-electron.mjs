@@ -44,8 +44,23 @@ if (!existsSync(electronPkg)) {
 
 if (!binaryOk()) {
   console.log("[cider] Electron binary missing or wrong platform — downloading it now (~110 MB)…");
+
+  // Run the package's own install script DIRECTLY (not via pnpm rebuild):
+  // this sidesteps pnpm's build-script gating/caching, and we scrub env vars
+  // that make install.js exit silently without downloading anything.
+  const env = { ...process.env };
+  if (env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
+    console.warn(
+      "[cider] ELECTRON_SKIP_BINARY_DOWNLOAD is set in your environment — " +
+        "ignoring it for this download (it silently skips the Electron binary)."
+    );
+    delete env.ELECTRON_SKIP_BINARY_DOWNLOAD;
+  }
+  delete env.npm_config_platform; // never cross-download for another OS
+  delete env.npm_config_arch;
+
   try {
-    execSync("pnpm rebuild electron", { cwd: path.join(root, "electron"), stdio: "inherit" });
+    execSync(`"${process.execPath}" install.js`, { cwd: electronPkg, stdio: "inherit", env });
   } catch {
     /* fall through to the final check */
   }
@@ -54,8 +69,9 @@ if (!binaryOk()) {
 if (!binaryOk()) {
   console.error(
     "\n[cider] The castLabs Electron binary is still missing.\n" +
-      "  Try:  rm -rf electron/node_modules && pnpm --dir electron install\n" +
-      "  (the postinstall downloads the binary from GitHub releases — check your network/proxy)\n"
+      "  1. Check for env vars that block the download:  env | grep -i electron\n" +
+      "  2. Retry verbosely:  cd electron/node_modules/electron && DEBUG='@electron/get*' node install.js\n" +
+      "  (the binary comes from github.com/castlabs/electron-releases releases — check network/proxy)\n"
   );
   process.exit(1);
 }
