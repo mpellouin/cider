@@ -16,6 +16,9 @@
   "homepage": "https://cider.sh/",
   "buildResources": "resources",
   "scripts": {
+    "shell:setup": "pnpm --dir ui install && pnpm --dir electron install",
+    "shell:start": "pnpm --dir ui build && pnpm --dir electron start",
+    "shell:dev": "node scripts/dev-shell.mjs",
     "tauri:setup": "pnpm --dir ui install",
     "tauri": "node ui/node_modules/@tauri-apps/cli/tauri.js",
     "tauri:dev": "node ui/node_modules/@tauri-apps/cli/tauri.js dev",

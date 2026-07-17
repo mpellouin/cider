@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router";
 import Icon from "./Icon.vue";
-import { appWindow, isTauri } from "@/lib/tauri";
+import { appWindow, isDesktop } from "@/lib/tauri";
 import { usePlayer } from "@/stores/player";
 
 const router = useRouter();
@@ -32,7 +32,7 @@ function openPalette() {
     </button>
 
     <div class="titlebar-right" data-tauri-drag-region>
-      <div v-if="isTauri" class="window-controls">
+      <div v-if="isDesktop" class="window-controls">
         <button class="wc" title="Minimize" @click="appWindow.minimize()">
           <Icon name="minimize" :size="14" />
         </button>

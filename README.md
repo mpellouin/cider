@@ -35,22 +35,42 @@ This branch ports the original Electron/Vue 2 codebase to a modern stack:
 - ❤️ Love/rate songs, add albums & playlists to your library, queue management, shuffle/repeat
 - 🌗 Dark / light / auto themes, reduced-motion mode, custom titlebar
 
-### Platform notes on playback (DRM)
+### Two shells, one UI — pick by platform (DRM)
 
-MusicKit needs a content-decryption module for full songs:
+Full-length Apple Music playback needs a content-decryption module, and that
+dictates which shell to run:
 
-- **Windows** (WebView2) → full playback (Widevine/PlayReady ship with Edge runtime)
-- **macOS** (WKWebView) → full playback (FairPlay)
-- **Linux** (WebKitGTK) → no CDM available; Cider automatically falls back to **30-second previews** and tells you so in Settings
+| Shell | Linux | Windows | macOS | Weight |
+|---|---|---|---|---|
+| **Electron (castLabs Widevine)** — `electron/` | ✅ full playback | ✅ full playback | ✅ full playback | heavy |
+| **Tauri** — `src-tauri/` | ⚠️ 30s previews (WebKitGTK has no CDM) | ✅* (WebView2) | ✅* (FairPlay) | tiny |
 
-Apple-ID sign-in works everywhere: Cider opens the Apple auth popup in a dedicated
-Tauri window and relays MusicKit's postMessage handshake through Rust
-(see `src-tauri/src/lib.rs`).
+*subject to the OS webview exposing its CDM.
+
+**On Linux, use the Electron shell** — it embeds the same castLabs
+Widevine-enabled Electron the original Cider used, so full playback works.
+The Vue UI is identical in both shells (`ui/src/lib/tauri.ts` abstracts the
+bridge); the Tauri shell remains the lightweight option for Windows/macOS.
+
+Apple-ID sign-in works in both: natively via popups in Electron, and through a
+dedicated auth window + postMessage relay in Tauri (see `src-tauri/src/lib.rs`).
 
 ## 🚀 Getting started
 
-Prerequisites: [Node 20+, pnpm](https://pnpm.io), [Rust](https://rustup.rs), and the
-[Tauri Linux dependencies](https://tauri.app/start/prerequisites/) if you're on Linux
+Prerequisites: [Node 20+, pnpm](https://pnpm.io).
+
+### Electron shell (full playback everywhere, recommended on Linux)
+
+```bash
+pnpm run shell:setup   # install ui/ + electron/ deps (downloads castLabs Electron)
+pnpm run shell:dev     # dev mode: Vite hot reload + Electron
+pnpm run shell:start   # production mode: build ui/ then launch
+```
+
+### Tauri shell (lightweight, Windows/macOS)
+
+Also needs [Rust](https://rustup.rs) and, on Linux, the
+[Tauri system dependencies](https://tauri.app/start/prerequisites/)
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, …).
 
 ```bash
@@ -59,19 +79,26 @@ pnpm run tauri:dev     # run the desktop app with hot reload
 pnpm run tauri:build   # produce installers/bundles
 ```
 
-Frontend-only development (runs in a normal browser, no Rust needed):
+### Frontend only (any browser, no native toolchain)
 
 ```bash
 pnpm run ui:dev
 ```
 
+### Token troubleshooting
+
+Cider fetches an Apple Music developer token automatically (Cider API, then
+scraping the public web player). If both fail on your network, the boot screen
+lets you paste a token manually (stored locally).
+
 ## 🗂 Repository layout
 
 ```
-src-tauri/   Rust backend: token acquisition, Apple auth window, Discord RPC
-ui/          Vue 3 + TypeScript frontend (Vite, Pinia, vue-router)
+ui/          Vue 3 + TypeScript frontend (Vite, Pinia, vue-router) — shared by both shells
+electron/    castLabs Electron (Widevine) shell: full DRM playback on every OS
+src-tauri/   Tauri/Rust shell: token acquisition, Apple auth window, Discord RPC
 src/         Legacy Electron/Vue 2 sources (kept for reference)
-docs/        Documentation, incl. the Tauri migration notes
+docs/        Documentation, incl. the migration notes
 ```
 
 See [docs/TAURI_MIGRATION.md](docs/TAURI_MIGRATION.md) for the architecture of the

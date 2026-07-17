@@ -18,6 +18,15 @@ const settings = useSettings();
 
 const bootStep = ref<BootstrapProgress["step"]>("token");
 const bootDetail = ref("");
+const manualToken = ref("");
+
+function saveManualToken() {
+  const token = manualToken.value.trim();
+  if (!token || token.split(".").length !== 3) return;
+  localStorage.setItem("cider.manualToken", token);
+  manualToken.value = "";
+  void boot();
+}
 
 const bootMessages: Record<string, string> = {
   token: "Contacting Apple Music…",
@@ -89,6 +98,22 @@ onMounted(() => {
         <p class="boot-error-title">{{ bootMessages.error }}</p>
         <p class="boot-error-detail">{{ bootDetail }}</p>
         <button class="pill-btn" @click="boot">Try again</button>
+        <div class="manual-token">
+          <p class="manual-token-hint">
+            Stuck? Paste an Apple Music developer token (JWT starting with
+            <code>eyJh…</code>) and Cider will use it instead:
+          </p>
+          <div class="manual-token-row">
+            <input
+              v-model="manualToken"
+              class="manual-token-input"
+              placeholder="eyJhbGciOiJFUzI1NiIs…"
+              spellcheck="false"
+              @keydown.enter="saveManualToken"
+            />
+            <button class="pill-btn ghost" @click="saveManualToken">Use token</button>
+          </div>
+        </div>
       </template>
     </div>
   </div>
@@ -177,6 +202,38 @@ onMounted(() => {
   font-size: 12.5px;
   color: var(--text-tertiary);
   user-select: text;
+}
+
+.manual-token {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+}
+.manual-token-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.manual-token-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.manual-token-input {
+  flex: 1;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  outline: none;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.manual-token-input:focus {
+  border-color: rgba(var(--accent-rgb), 0.5);
 }
 
 .shell {

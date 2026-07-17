@@ -3,7 +3,7 @@ import Icon from "@/components/Icon.vue";
 import { useSettings, type CiderSettings } from "@/stores/settings";
 import { usePlayer } from "@/stores/player";
 import { getDrmStatus } from "@/lib/musickit";
-import { openExternal, isTauri } from "@/lib/tauri";
+import { openExternal, isDesktop } from "@/lib/tauri";
 
 const settings = useSettings();
 const player = usePlayer();
@@ -81,17 +81,17 @@ const drm = getDrmStatus();
 
     <section class="group fade-up">
       <h2 class="group-title">Integrations</h2>
-      <div v-for="t in integrationToggles" :key="t.key" class="row" :class="{ disabled: t.tauriOnly && !isTauri }">
+      <div v-for="t in integrationToggles" :key="t.key" class="row" :class="{ disabled: t.tauriOnly && !isDesktop }">
         <div class="row-text">
           <div class="row-label">{{ t.label }}</div>
-          <div class="row-hint">{{ t.hint }}<template v-if="t.tauriOnly && !isTauri"> (desktop app only)</template></div>
+          <div class="row-hint">{{ t.hint }}<template v-if="t.tauriOnly && !isDesktop"> (desktop app only)</template></div>
         </div>
         <button
           class="switch"
           :class="{ on: settings[t.key] }"
           role="switch"
           :aria-checked="Boolean(settings[t.key])"
-          :disabled="t.tauriOnly && !isTauri"
+          :disabled="t.tauriOnly && !isDesktop"
           @click="settings.set(t.key, !settings[t.key] as never)"
         >
           <span class="knob"></span>
@@ -121,7 +121,8 @@ const drm = getDrmStatus();
             <template v-if="drm === 'full'">Full-quality DRM playback is available on this platform.</template>
             <template v-else-if="drm === 'preview-only'">
               No DRM module in this webview — Cider plays 30-second previews.
-              Full playback works on Windows (WebView2) and macOS (WKWebView).
+              For full playback on Linux, run the Electron (Widevine) shell:
+              <code>pnpm run shell:start</code>.
             </template>
             <template v-else>DRM capability unknown.</template>
           </div>
@@ -134,8 +135,8 @@ const drm = getDrmStatus();
       <h2 class="group-title">About</h2>
       <div class="row">
         <div class="row-text">
-          <div class="row-label">Cider 2.0 (Tauri)</div>
-          <div class="row-hint">A delightful Apple Music experience — rebuilt on Tauri, Vue 3 and Rust.</div>
+          <div class="row-label">Cider 2.0</div>
+          <div class="row-hint">A delightful Apple Music experience — Vue 3 UI on a Tauri or Electron-Widevine shell.</div>
         </div>
         <button class="pill-btn ghost" @click="openExternal('https://cider.sh')">
           <Icon name="external" :size="14" /> cider.sh

@@ -116,3 +116,25 @@ cd src-tauri && cargo check   # backend type-check
 
 The frontend degrades gracefully in a plain browser (`isTauri` guard in
 `ui/src/lib/tauri.ts`), which keeps UI iteration fast.
+
+## Addendum: the Electron-Widevine shell (`electron/`)
+
+Reality check after the port: **WebKitGTK ships no Widevine/FairPlay CDM and
+cannot load one** without rebuilding WebKitGTK itself with an OpenCDM backend —
+not viable for a distributable desktop app. That is precisely why the original
+Cider used `castlabs/electron-releases` (Chromium + Widevine).
+
+So the repo now ships **two shells around the same `ui/` frontend**:
+
+- `electron/` — castLabs Electron (`v32.2.6+wvcus`), Widevine included.
+  Full playback on Linux/Windows/macOS. MusicKit popups work natively
+  (`setWindowOpenHandler` allows Apple domains); `origin`/`referer` headers are
+  spoofed to `beta.music.apple.com` on `apple.com` requests, same as legacy.
+  Bridge exposed by `preload.cjs` as `window.cider` (token fetch, window
+  controls, Discord RPC via discord-auto-rpc, global media keys).
+- `src-tauri/` — the lightweight shell; on Linux it is preview-only.
+
+`ui/src/lib/tauri.ts` is the single abstraction point: it detects
+`__TAURI_INTERNALS__` vs `window.cider` vs plain browser, and maps the same
+command names onto whichever bridge exists. Nothing else in the UI knows which
+shell it runs in.
