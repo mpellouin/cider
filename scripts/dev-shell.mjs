@@ -4,11 +4,19 @@
  * pointed at it. Ctrl-C tears both down.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const DEV_URL = "http://localhost:1420";
+
+// Make sure the Electron binary is actually there before we start anything.
+const check = spawnSync(process.execPath, [path.join(root, "scripts", "check-electron.mjs")], {
+  stdio: "inherit",
+});
+if (check.status !== 0) process.exit(check.status ?? 1);
 
 const children = [];
 
