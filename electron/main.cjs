@@ -219,15 +219,24 @@ app.whenReady().then(async () => {
   });
 });
 
+let widevineInstalling = false;
+
 /**
- * Install/verify the castLabs Widevine CDM, logging the real reason on
- * failure (the nested ComponentError.detail carries the actual status).
+ * Install/verify the castLabs Widevine CDM with retry + backoff.
+ *
+ * `components.whenReady()` fires a single Omaha update check; Google's
+ * component server frequently answers "No component available" on the first
+ * (or a throttled) check, so a lone attempt gives up prematurely. We retry
+ * with backoff. Per castLabs docs, once the CDM finally downloads on Linux
+ * the app must be relaunched before it actually works.
  */
-function installWidevine() {
+async function installWidevine() {
   if (!components?.whenReady) {
     console.warn("[cider] Not a castLabs build — no Widevine, previews only.");
     return;
   }
+  if (widevineInstalling) return;
+  widevineInstalling = true;
 
   // A previous run may have persisted component updates as disabled, which
   // would make the CDM never install. Force them on.
@@ -240,29 +249,50 @@ function installWidevine() {
     /* property may be read-only on some builds */
   }
 
-  components
-    .whenReady()
-    .then(() => {
+  const delaysMs = [0, 8_000, 15_000, 30_000, 45_000, 60_000];
+  let lastDetails = null;
+
+  for (let attempt = 0; attempt < delaysMs.length; attempt++) {
+    if (delaysMs[attempt] > 0) {
+      console.log(`[cider] Retrying Widevine install in ${delaysMs[attempt] / 1000}s (attempt ${attempt + 1})…`);
+      await new Promise((r) => setTimeout(r, delaysMs[attempt]));
+    }
+    try {
+      await components.whenReady();
       const status = components.status?.() ?? {};
-      console.log("[cider] Widevine ready:", JSON.stringify(status));
-      win?.webContents.send("cider:widevine-ready");
-    })
-    .catch((err) => {
-      const details = (err?.errors ?? [err]).map((e) => ({
-        message: e?.message,
-        detail: e?.detail, // { id, status, title, version }
-      }));
-      console.warn(
-        "[cider] Widevine CDM failed to install:\n" +
-          JSON.stringify(details, null, 2) +
-          "\n[cider] status(): " +
-          JSON.stringify(components.status?.() ?? {}) +
-          "\n[cider] Full playback needs this CDM. It downloads from Google's" +
-          " component servers; if this persists, a DNS/VPN/proxy is likely" +
-          " blocking it. Retry from Settings or relaunch."
+      const installed = Object.values(status).some(
+        (c) => c?.status === "installed" || c?.version
       );
-      win?.webContents.send("cider:widevine-failed", details);
-    });
+      console.log("[cider] Widevine whenReady resolved:", JSON.stringify(status));
+      if (installed) {
+        console.log(
+          "[cider] ✅ Widevine CDM installed. On Linux it takes effect after a " +
+            "restart — please quit and relaunch Cider once for full playback."
+        );
+        win?.webContents.send("cider:widevine-ready", status);
+        widevineInstalling = false;
+        return;
+      }
+      // resolved but still not installed → treat as retryable
+    } catch (err) {
+      lastDetails = (err?.errors ?? [err]).map((e) => ({
+        message: e?.message,
+        detail: e?.detail,
+      }));
+    }
+  }
+
+  console.warn(
+    "[cider] Widevine CDM still not installed after retries:\n" +
+      JSON.stringify(lastDetails ?? components.status?.() ?? {}, null, 2) +
+      "\n[cider] The component server was reachable, so this is usually Omaha" +
+      " throttling repeated checks. Fixes: (1) fully quit Cider and wait ~15 min" +
+      " before relaunching once; (2) check for a system/GNOME network proxy" +
+      " (Settings ▸ Network ▸ Proxy = Off); (3) ensure IPv6 actually works or" +
+      " disable it. Retry any time from the app."
+  );
+  win?.webContents.send("cider:widevine-failed", lastDetails);
+  widevineInstalling = false;
 }
 
 app.on("window-all-closed", () => {
