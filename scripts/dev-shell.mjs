@@ -54,7 +54,7 @@ if (!ready) {
   shutdown(1);
 }
 
-const electron = run("pnpm", ["--dir", "electron", "exec", "electron", ".", "--dev"], {
+const electron = run(process.execPath, [path.join(root, "electron", "launch.cjs"), "--dev"], {
   env: { ...process.env, CIDER_DEV_URL: DEV_URL },
 });
 electron.on("exit", (code) => shutdown(code ?? 0));
